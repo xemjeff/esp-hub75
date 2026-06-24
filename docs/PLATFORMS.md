@@ -282,10 +282,9 @@ This gives LAT signal extra settling time during fast LSB transitions.
 
 **Buffer Structure** (per bit plane):
 ```
-[Pixel Section: MSB=1, RGB data]  ← Clock enabled, data shifts in
-[LAT pulse: MSB=1, LAT=HIGH]
-[Latch blanking: MSB=1, OE=HIGH]
-[PADDING: MSB=0, all zeros] ← Clock disabled, display time!
+[Pixel Section: MSB=1, RGB data]    ← dma_width_ words, clock enabled, data shifts in
+[LAT word: MSB=1, LAT=HIGH]         ← 1 extra word AFTER pixels (prevents column-0 drop)
+[PADDING: MSB=0, all zeros]         ← Clock disabled, display time (BCM timing)
 ```
 
 **Padding Formula**:

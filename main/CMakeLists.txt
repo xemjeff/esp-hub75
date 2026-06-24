@@ -1,6 +1,10 @@
 # SPDX-FileCopyrightText: 2025 Stuart Parmenter
 # SPDX-License-Identifier: MIT
 
+
+cmake_minimum_required(VERSION 3.31)
+
+
 # Select source file based on menuconfig choice
 if(CONFIG_EXAMPLE_SMOKE_TEST)
     set(MAIN_SRCS "smoke_test.cpp")
