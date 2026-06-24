@@ -208,12 +208,12 @@ void ParlioDma::shutdown() {
 void ParlioDma::configure_parlio() {
   ESP_LOGI(TAG, "Configuring PARLIO TX unit...");
 
-  // Calculate TOTAL buffer size (all rows × all bits) for single-buffer transmission
-  // Buffer structure: [pixels (LAT on last pixel)][padding]
+  // Calculate TOTAL buffer size (all rows × all bits) for single-buffer transmission.
+  // Buffer structure per bit-plane: [(dma_width_ + 1) pixel words (incl. dedicated LAT word)][padding]
   size_t max_buffer_size = 0;
   for (int row = 0; row < num_rows_; row++) {
     for (int bit = 0; bit < bit_depth_; bit++) {
-      max_buffer_size += dma_width_ + calculate_bcm_padding(bit);
+      max_buffer_size += (dma_width_ + 1) + calculate_bcm_padding(bit);
     }
   }
 
@@ -418,7 +418,11 @@ bool ParlioDma::allocate_row_buffers() {
       int idx = (row * bit_depth_) + bit;
       BitPlaneBuffer &bp = row_buffers_[0][idx];
 
-      bp.pixel_words = dma_width_;
+      // pixel_words = dma_width_ + 1: dma_width_ data words + 1 dedicated LAT word.
+      // The LAT word is a separate extra clock cycle after all pixel data has been
+      // shifted in, preventing the first column from being dropped (which occurs when
+      // LAT is asserted on the same clock edge as the last data bit).
+      bp.pixel_words = dma_width_ + 1;
       bp.padding_words = calculate_bcm_padding(bit);
       bp.total_words = bp.pixel_words + bp.padding_words;
 
@@ -426,8 +430,8 @@ bool ParlioDma::allocate_row_buffers() {
 
       // Log once per bit plane (sizes are identical across all rows)
       if (row == 0) {
-        ESP_LOGD(TAG, "Bit %d: %zu pixel words + %zu padding = %zu total (all %d rows)", bit, bp.pixel_words,
-                 bp.padding_words, bp.total_words, num_rows_);
+        ESP_LOGD(TAG, "Bit %d: %zu pixel words (incl. LAT word) + %zu padding = %zu total (all %d rows)", bit,
+                 bp.pixel_words, bp.padding_words, bp.total_words, num_rows_);
       }
     }
   }
@@ -488,7 +492,8 @@ bool ParlioDma::allocate_row_buffers() {
         for (int bit = 0; bit < bit_depth_; bit++) {
           int idx = (row * bit_depth_) + bit;
           BitPlaneBuffer &bp = row_buffers_[1][idx];
-          bp.pixel_words = dma_width_;
+          // pixel_words = dma_width_ + 1: dma_width_ data words + 1 dedicated LAT word.
+          bp.pixel_words = dma_width_ + 1;
           bp.padding_words = calculate_bcm_padding(bit);
           bp.total_words = bp.pixel_words + bp.padding_words;
           bp.data = current_ptr;
@@ -551,7 +556,12 @@ void ParlioDma::initialize_buffer_internal(BitPlaneBuffer *buffers) {
       // This differs from GDMA/I2S which need row 0, bit 0 to wrap around and
       // use row 31's address because descriptor chains have no padding period.
 
-      // Initialize pixel section (LAT on last pixel)
+      // Initialize pixel section: dma_width_ data words + 1 dedicated LAT word.
+      //
+      // The LAT pulse occupies its own extra clock cycle AFTER all dma_width_ pixel
+      // data words have been shifted in.  Placing LAT on the same clock as the last
+      // data word causes that word (column 0 of the panel) to be latched before the
+      // shift register captures it, leaving the first column permanently blank.
       for (size_t x = 0; x < bp.pixel_words; x++) {
         uint16_t word = 0;
 #ifdef SOC_PARLIO_TX_CLK_SUPPORT_GATING
@@ -560,9 +570,9 @@ void ParlioDma::initialize_buffer_internal(BitPlaneBuffer *buffers) {
         word |= (row_addr << ADDR_SHIFT);  // Row address
         word |= (1 << OE_BIT);             // OE=1 (blanked during shift)
 
-        // LAT pulse on last pixel
+        // Dedicated LAT word: last word (index dma_width_) after all pixel data
         if (x == bp.pixel_words - 1) {
-          word |= (1 << LAT_BIT);
+          word |= (1 << LAT_BIT);  // LAT pulse on extra word after last data pixel
         }
 
         // RGB data = 0 (will be set by draw_pixels)
